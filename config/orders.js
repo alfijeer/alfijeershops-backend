@@ -13,7 +13,7 @@ module.exports = {
   },
 
   // Admin may open payment proof only in these statuses
-  PROOF_VISIBLE_STATUSES: ['PAYMENT_ISSUE', 'DISPUTED', 'DELIVERY_REVIEW', 'REFUND_PENDING'],
+  PROOF_VISIBLE_STATUSES: ['PAYMENT_ISSUE', 'DISPUTED', 'DELIVERY_REVIEW', 'REFUND_PENDING', 'REPLACEMENT_PENDING'],
   PROOF_LINK_SECONDS: 300, // how long a proof link works
 
   MIN_SAMPLE: 10, // below this many orders, rates show as "not enough data"

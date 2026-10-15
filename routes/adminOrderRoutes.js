@@ -26,7 +26,11 @@ function adminView(o) {
   const p = Object.assign({}, o.payment || {});
   p.hasProof = !!(p.proofImageUrl || p.proofPublicId);
   delete p.proofImageUrl; delete p.proofPublicId; delete p.proofFormat;
+  const d = Object.assign({}, o.dispute || {});
+  d.evidenceCount = (d.evidence || []).length;
+  delete d.evidence;                                  // links are only given out one by one, logged, by the route below
   return Object.assign({}, o, {
+    dispute: d,
     shopName: o.seller && o.seller.businessName,
     buyerName: o.buyer && o.buyer.fullName,
     seller: o.seller && o.seller._id ? o.seller._id : o.seller,
@@ -36,14 +40,15 @@ function adminView(o) {
 }
 
 // A short-lived link to a private image. Falls back to the stored link if no private id was saved.
-function proofLink(payment) {
-  if (payment.proofPublicId) {
-    return cloudinary.utils.private_download_url(payment.proofPublicId, payment.proofFormat || 'jpg', {
+function signedLink(publicId, format, fallbackUrl) {
+  if (publicId) {
+    return cloudinary.utils.private_download_url(publicId, format || 'jpg', {
       resource_type: 'image', type: 'authenticated', expires_at: Math.floor(Date.now() / 1000) + cfg.PROOF_LINK_SECONDS
     });
   }
-  return payment.proofImageUrl;
+  return fallbackUrl;
 }
+const proofLink = (payment) => signedLink(payment.proofPublicId, payment.proofFormat, payment.proofImageUrl);
 
 router.use(protect, requireRole('admin'), requireOrderRole('ADMIN'));
 
@@ -66,6 +71,18 @@ router.get('/orders/:id/payment-proof', handle(async (req, res) => {
   if (!p.proofImageUrl && !p.proofPublicId) return res.status(404).json({ message: 'No payment proof was uploaded for this order.' });
   await AdminLog.create({ adminId: req.actor.id, action: 'VIEW_PROOF', orderId: o._id, shopId: o.seller, note: 'Opened in status ' + o.status });
   res.json({ url: proofLink(p) });
+}));
+
+// The buyer's dispute photos: short-lived private links, and the view is logged.
+router.get('/orders/:id/dispute-evidence', handle(async (req, res) => {
+  if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ message: 'Invalid id.' });
+  const o = await Order.findById(req.params.id).select('status seller dispute.evidence').lean();
+  if (!o) return res.status(404).json({ message: 'Order not found.' });
+  if (!cfg.PROOF_VISIBLE_STATUSES.includes(o.status)) return res.status(403).json({ message: 'Evidence can only be opened while an order is under review or being resolved.' });
+  const list = (o.dispute && o.dispute.evidence) || [];
+  if (!list.length) return res.status(404).json({ message: 'The buyer did not attach any photos.' });
+  await AdminLog.create({ adminId: req.actor.id, action: 'VIEW_EVIDENCE', orderId: o._id, shopId: o.seller, note: `Opened ${list.length} photo(s) in status ${o.status}` });
+  res.json({ urls: list.map((e) => signedLink(e.publicId, e.format, e.url)) });
 }));
 
 // body: { decision, reason, faultParty? }. The workflow decides whether this decision is allowed right now.

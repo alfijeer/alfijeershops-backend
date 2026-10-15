@@ -49,7 +49,11 @@ const orderSchema = new Schema({
     resolution: String
   },
 
-  dispute: { reason: String, openedAt: Date },
+  dispute: {
+    reason: String,
+    openedAt: Date,
+    evidence: [{ url: String, publicId: String, format: String, _id: false }]   // up to 3 private photos from the buyer
+  },
   replacementCount: { type: Number, default: 0 },
   refund: {
     faultParty: { type: String, enum: ['SELLER', 'BUYER', 'NONE'] },

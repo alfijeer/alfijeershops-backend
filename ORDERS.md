@@ -35,6 +35,8 @@ ROUTES (all under /api)
   GET  /orders/shop  (also /orders/seller)   seller's orders
   GET  /orders/:id                      one order (its buyer or its shop only)
   POST /orders/:id/proof                buyer uploads a receipt (multipart field "proof"), only in PAYMENT_ISSUE
+  POST /orders/:id/dispute              buyer reports "not as ordered" (multipart: reason + up to 3 optional photos, field "evidence"),
+                                        only while the order is DELIVERED. Photos go to the same private folder as payment proofs.
   POST /orders/:id/actions/:ACTION      a button press (see below)
 
   Buyer actions:  BUYER_CANCEL, BUYER_PAID {method}, BUYER_REPORT_PAYMENT_ISSUE {reason}, BUYER_CONFIRM_RECEIPT,
@@ -44,6 +46,7 @@ ROUTES (all under /api)
 
   GET  /admin/orders?status=&shopId=&limit=       all orders
   GET  /admin/orders/:id/payment-proof            5-minute private link; logged; only in issue statuses
+  GET  /admin/orders/:id/dispute-evidence         the buyer's dispute photos as 5-minute private links; each view is logged
   PUT  /admin/orders/:id/resolve                  { decision, reason, faultParty? }
   GET  /admin/shops/:id/order-stats?range=all|30d|7d
 

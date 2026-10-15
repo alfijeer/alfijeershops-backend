@@ -140,6 +140,15 @@ test('seller cancel after payment confirmation goes to refund with seller at fau
   assert.strictEqual(t.set['refund.faultParty'], 'SELLER');
 });
 
+test('dispute photos: optional, at most 3, https only', () => {
+  const o = mk('DELIVERED');
+  const ev = (n) => Array.from({ length: n }, (_, i) => ({ url: 'https://img.example/' + i + '.jpg', publicId: 'p' + i, format: 'jpg' }));
+  assert.strictEqual(go(o, 'BUYER_DISPUTE', BUYER, { reason: 'Wrong colour' }).set['dispute.evidence'], undefined);   // no photos is fine
+  assert.strictEqual(go(o, 'BUYER_DISPUTE', BUYER, { reason: 'Wrong colour', evidence: ev(3) }).set['dispute.evidence'].length, 3);
+  fails(() => go(o, 'BUYER_DISPUTE', BUYER, { reason: 'Wrong colour', evidence: ev(4) }), 'VALIDATION');
+  fails(() => go(o, 'BUYER_DISPUTE', BUYER, { reason: 'Wrong colour', evidence: [{ url: 'http://insecure/x.jpg' }] }), 'VALIDATION');
+});
+
 test('counters: completion and dispute are counted', () => {
   assert.deepStrictEqual(go(mk('DELIVERED'), 'BUYER_CONFIRM_RECEIPT', BUYER).counters, { completedOrders: 1 });
   assert.deepStrictEqual(go(mk('DELIVERED'), 'BUYER_DISPUTE', BUYER, { reason: 'Wrong colour' }).counters, { disputeCount: 1 });

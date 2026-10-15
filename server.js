@@ -15,6 +15,7 @@ const productRoutes = require('./routes/productRoutes');
 const orderRoutes = require('./routes/orderRoutes');
 const disputeRoutes = require('./routes/disputeRoutes');
 const adminOrderRoutes = require('./routes/adminOrderRoutes');
+const searchRoutes = require('./routes/searchRoutes');
 const mongoose = require('mongoose');
 const { startTimers } = require('./services/timers');
 
@@ -82,6 +83,7 @@ app.use('/api/buyers', buyerRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/disputes', disputeRoutes);
+app.use('/api/search', searchRoutes); // product + shop search
 app.use('/api/admin', adminOrderRoutes); // admin order queue, payment proof, decisions, shop order stats
 
 app.use(notFound);

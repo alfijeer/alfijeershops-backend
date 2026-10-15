@@ -61,7 +61,17 @@ const ACTIONS = {
     } },
   BUYER_CONFIRM_RECEIPT: { roles: ['BUYER'], from: ['DELIVERED'], to: 'COMPLETED', note: 'Buyer confirmed receipt' },
   BUYER_DISPUTE: { roles: ['BUYER'], from: ['DELIVERED'], to: 'DISPUTED',
-    set: (o, p, now) => ({ 'dispute.reason': text(p.reason, 5, 'Dispute reason'), 'dispute.openedAt': now }) },
+    set: (o, p, now) => {
+      const s = { 'dispute.reason': text(p.reason, 5, 'Dispute reason'), 'dispute.openedAt': now };
+      if (p.evidence != null) {                       // optional photos: the item received, or the payment receipt
+        if (!Array.isArray(p.evidence) || p.evidence.length > 3) bad('You can attach up to 3 photos.');
+        s['dispute.evidence'] = p.evidence.map((e) => {
+          if (!/^https:\/\//.test(String((e && e.url) || ''))) bad('One of the photos is not valid.');
+          return { url: String(e.url), publicId: e.publicId ? String(e.publicId) : undefined, format: String(e.format || 'jpg') };
+        });
+      }
+      return s;
+    } },
   BUYER_CONFIRM_REFUND: { roles: ['BUYER'], from: ['REFUND_PENDING'], to: 'REFUNDED', note: 'Buyer confirmed refund received' },
 
   // ── Seller ──

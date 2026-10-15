@@ -10,8 +10,8 @@ const Order = require('../models/Order');
 const svc = require('../services/orderService');
 const { ownsOrder } = require('../services/workflow');
 
-const handle = (fn) => async (req, res) => {
-  try { await fn(req, res); }
+const handle = (fn) => async (req, res, next) => {
+  try { await fn(req, res, next); }
   catch (e) {
     if (!e.status) console.error(e);
     res.status(e.status || 500).json({ message: e.status ? e.message : 'Something went wrong. Please try again.', code: e.code });
@@ -20,6 +20,24 @@ const handle = (fn) => async (req, res) => {
 const badId = (req, res) => { if (mongoose.isValidObjectId(req.params.id)) return false; res.status(400).json({ message: 'Invalid order id.' }); return true; };
 
 router.use(protect);
+
+// Turns upload problems into plain messages instead of server errors
+const takeFiles = (fn) => (req, res, next) => fn(req, res, (err) => {
+  if (!err) return next();
+  const m = err.code === 'LIMIT_FILE_SIZE' ? 'Each photo must be 5 MB or less.'
+    : err.code === 'LIMIT_UNEXPECTED_FILE' ? 'You can attach up to 3 photos.'
+    : 'Upload failed. Please use JPG, PNG or WEBP photos.';
+  res.status(400).json({ message: m });
+});
+// Checks owner and status BEFORE any file is accepted, so rejected requests never leave stray uploads behind
+const needsStatus = (status) => handle(async (req, res, next) => {
+  if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ message: 'Invalid order id.' });
+  const o = await Order.findById(req.params.id).select('buyer seller status').lean();
+  if (!o || !ownsOrder(o, req.actor)) return res.status(404).json({ message: 'Order not found.' });
+  if (o.status !== status) return res.status(409).json({ message: `This is not possible while the order is ${o.status}.` });
+  next();
+});
+const fileInfo = (f) => ({ url: f.path, publicId: f.filename, format: String(f.path).split('.').pop().split('?')[0] });
 
 // Buyer places an order. body: { shopId, items: [{ productId, quantity }] }
 router.post('/', requireOrderRole('BUYER'), handle(async (req, res) => {
@@ -47,7 +65,7 @@ router.get('/:id', requireOrderRole('BUYER', 'SELLER'), handle(async (req, res) 
 }));
 
 // Buyer uploads a receipt (only while the order is in PAYMENT_ISSUE). multipart field name: "proof"
-router.post('/:id/proof', requireOrderRole('BUYER'), (req, res, next) => proofUpload.single('proof')(req, res, next), handle(async (req, res) => {
+router.post('/:id/proof', requireOrderRole('BUYER'), needsStatus('PAYMENT_ISSUE'), takeFiles(proofUpload.single('proof')), handle(async (req, res) => {
   if (badId(req, res)) return;
   if (!req.file) return res.status(400).json({ message: 'Please choose a receipt image.' });
   const url = req.file.path;
@@ -56,6 +74,13 @@ router.post('/:id/proof', requireOrderRole('BUYER'), (req, res, next) => proofUp
     amount: req.body.amount || undefined, reference: req.body.reference || undefined
   });
   res.json({ order });
+}));
+
+// Buyer reports "not as ordered" with up to 3 optional photos (the item, or the payment receipt).
+// multipart: reason (text) + evidence (files). Photos go to the same PRIVATE folder as payment proofs.
+router.post('/:id/dispute', requireOrderRole('BUYER'), needsStatus('DELIVERED'), takeFiles(proofUpload.array('evidence', 3)), handle(async (req, res) => {
+  const evidence = (req.files || []).map(fileInfo);
+  res.json({ order: await svc.transition(req.params.id, 'BUYER_DISPUTE', req.actor, { reason: req.body.reason, evidence }) });
 }));
 
 // Buyer and seller buttons. Only BUYER_* and SELLER_* actions can come through here;
