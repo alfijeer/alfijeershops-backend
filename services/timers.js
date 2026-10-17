@@ -13,8 +13,9 @@ async function runTimers(now) {
   running = true;
   const done = {};
   try {
-    for (const [status, action] of TIMER_RULES) {
-      const due = await Order.find({ status, deadlineAt: { $lte: now || new Date() } }).select('_id').limit(200).lean();
+    // Each rule may carry an extra filter (e.g. delivery vs pickup) so the timer acts only on the party who was expected to act
+    for (const [status, action, extra] of TIMER_RULES) {
+      const due = await Order.find(Object.assign({ status, deadlineAt: { $lte: now || new Date() } }, extra || {})).select('_id').limit(200).lean();
       for (const o of due) {
         try { await transition(o._id, action, SYSTEM); done[action] = (done[action] || 0) + 1; }
         catch (e) { if (e.code !== 'CONFLICT') console.error(`[timers] ${action} on ${o._id}:`, e.message); }

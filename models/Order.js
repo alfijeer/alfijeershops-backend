@@ -5,7 +5,7 @@ const mongoose = require('mongoose');
 const { Schema } = mongoose;
 
 const STATUSES = [
-  'PENDING', 'ACCEPTED', 'PAYMENT_SUBMITTED', 'PAYMENT_CONFIRMED', 'DELIVERED', 'COMPLETED',
+  'PENDING', 'ACCEPTED', 'TOTAL_SENT', 'TOTAL_ACCEPTED', 'PAYMENT_SUBMITTED', 'PAYMENT_CONFIRMED', 'DELIVERED', 'COMPLETED',
   'CANCELLED', 'PAYMENT_ISSUE', 'DELIVERY_REVIEW', 'DISPUTED', 'REPLACEMENT_PENDING',
   'REFUND_PENDING', 'REFUNDED'
 ];
@@ -25,7 +25,20 @@ const orderSchema = new Schema({
   seller: { type: Schema.Types.ObjectId, ref: 'Seller', required: true, index: true },
 
   items: [{ productId: Schema.Types.ObjectId, name: String, price: Number, quantity: Number, _id: false }],
-  total: { type: Number, required: true, min: 0 },
+
+  // How the buyer receives the order. Orders created before this existed have no value: treat a missing value as PICKUP.
+  fulfilment: { type: String, enum: ['PICKUP', 'DELIVERY'], default: 'PICKUP' },
+  delivery: {                                                   // only for DELIVERY orders
+    name: String, phone: String, address: String, landmark: String, note: String
+  },
+  productTotal: Number,                                         // price of the items alone
+  deliveryFee: { type: Number, default: 0, min: 0 },            // entered by the seller (delivery orders only)
+  total: { type: Number, required: true, min: 0 },              // productTotal + deliveryFee: what the buyer pays
+
+  // Copy of the seller's bank details, saved on the order at the moment the buyer is allowed to see them:
+  // pickup = when the seller accepts, delivery = when the buyer accepts the total.
+  // Later edits to the seller's bank details never change an order that is already in progress.
+  paymentDetails: { bankName: String, accountName: String, accountNumber: String, sharedAt: Date },
 
   status: { type: String, enum: STATUSES, default: 'PENDING', index: true },
   statusChangedAt: { type: Date, default: Date.now },
@@ -37,7 +50,7 @@ const orderSchema = new Schema({
     amount: Number,
     reference: String,
     submittedAt: Date,
-    proofImageUrl: String,          // only filled when a payment issue opens
+    proofImageUrl: String,          // the buyer's optional receipt (private: never sent to the browser, only short-lived links)
     proofPublicId: String,          // private Cloudinary id, used to make short-lived links
     proofFormat: String,
     proofDueAt: Date,
@@ -61,7 +74,8 @@ const orderSchema = new Schema({
     strikeApplied: { type: Boolean, default: false }
   },
 
-  cancelReason: { type: String, enum: ['SELLER_TIMEOUT', 'SELLER_DECLINED', 'BUYER_CANCELLED', 'PAYMENT_DEADLINE_EXPIRED', 'PAYMENT_INVALID', 'ADMIN_DECISION'] },
+  cancelReason: { type: String, enum: ['SELLER_TIMEOUT', 'SELLER_DECLINED', 'BUYER_CANCELLED', 'PAYMENT_DEADLINE_EXPIRED', 'PAYMENT_INVALID', 'ADMIN_DECISION',
+    'SELLER_NO_TOTAL', 'TOTAL_DECLINED', 'TOTAL_EXPIRED'] },
   cancelledBy: { type: String, enum: ['BUYER', 'SELLER', 'SYSTEM', 'ADMIN'] },
   cancelNote: String,
 

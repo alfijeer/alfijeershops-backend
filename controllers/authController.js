@@ -4,6 +4,7 @@ const Buyer = require('../models/Buyer');
 const Seller = require('../models/Seller');
 const generateToken = require('../utils/generateToken');
 const sendEmail = require('../utils/sendEmail');
+const { cleanBankDetails } = require('../utils/bankDetails');
 
 // POST /api/auth/register
 // Buyers send JSON (see auth.html completeBuyerReg): fullName, email, phone,
@@ -11,6 +12,7 @@ const sendEmail = require('../utils/sendEmail');
 // Sellers send multipart/form-data (see auth.html completeSellerReg):
 // fullName, businessName, category, phone, whatsappNumber, state, city,
 // address, latitude, longitude, description, email, password, role: 'seller',
+// bankName, accountName, accountNumber (all three required: this is where buyers pay),
 // plus optional govId and shopPhoto files.
 async function register(req, res) {
   const { role } = req.body;
@@ -50,6 +52,11 @@ async function registerSeller(req, res) {
     return res.status(400).json({ message: 'Please fill in all required fields.' });
   }
 
+  // A seller cannot register without payment details, so every approved shop can receive money from day one.
+  // Checked before anything is created, so a mistake here never leaves a half-made account behind.
+  const bank = cleanBankDetails(req.body);
+  if (!bank.ok) return res.status(400).json({ message: bank.message });
+
   const existing = await User.findOne({ email: email.toLowerCase() });
   if (existing) {
     return res.status(409).json({ message: 'An account with that email already exists.' });
@@ -69,6 +76,7 @@ async function registerSeller(req, res) {
     city,
     address,
     description,
+    bankDetails: bank.value,
     latitude: latitude !== undefined && latitude !== '' ? Number(latitude) : null,
     longitude: longitude !== undefined && longitude !== '' ? Number(longitude) : null,
     shopPhotoUrl: shopPhotoFile ? shopPhotoFile.path : null,

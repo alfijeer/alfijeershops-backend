@@ -1,19 +1,58 @@
 'use strict';
 // Database layer. All business rules live in workflow.js; this file loads, saves and records.
 const mongoose = require('mongoose');
+const { v2: cloudinary } = require('cloudinary');
 const cfg = require('../config/orders');
 const Order = require('../models/Order');
 const Seller = require('../models/Seller');
 const Product = require('../models/Product');
 const AdminLog = require('../models/AdminLog');
 const { nextOrderNumber } = require('../utils/orderNumber');
-const { buildTransition, deadlineFor, checkBuyerLimit, TERMINAL, OrderError } = require('./workflow');
+const { buildTransition, deadlineFor, checkBuyerLimit, cleanFulfilment, ownsOrder, TERMINAL, OrderError } = require('./workflow');
+
+// Actions that need the seller's saved bank details (the workflow checks them and, when due, copies them onto the order)
+const NEEDS_BANK = ['SELLER_ACCEPT', 'BUYER_ACCEPT_TOTAL'];
+
+// What the buyer and the shop get to see of an order: the receipt itself never leaves the server
+// (only a flag, plus short-lived links from receiptLink below).
+function publicOrder(o) {
+  if (!o) return o;
+  const plain = o.toObject ? o.toObject() : o;
+  const p = Object.assign({}, plain.payment || {});
+  p.hasProof = !!(p.proofImageUrl || p.proofPublicId);
+  delete p.proofImageUrl; delete p.proofPublicId; delete p.proofFormat;
+  return Object.assign({}, plain, { payment: p });
+}
+
+// A short-lived link to a private image. Falls back to the stored link only when told to (admin screens, older orders).
+function signedLink(publicId, format, fallbackUrl) {
+  if (publicId) {
+    return cloudinary.utils.private_download_url(publicId, format || 'jpg', {
+      resource_type: 'image', type: 'authenticated', expires_at: Math.floor(Date.now() / 1000) + cfg.PROOF_LINK_SECONDS
+    });
+  }
+  return fallbackUrl;
+}
+
+// The payment receipt of one order, for the buyer who placed it or the shop it was placed with. Nobody else.
+async function receiptLink(orderId, actor) {
+  const o = await Order.findById(orderId).select('buyer seller payment.proofPublicId payment.proofFormat').lean();
+  if (!o || !['BUYER', 'SELLER'].includes(actor.role) || !ownsOrder(o, actor)) throw new OrderError(404, 'NOT_FOUND', 'Order not found.');
+  const p = o.payment || {};
+  if (!p.proofPublicId) throw new OrderError(404, 'NO_RECEIPT', 'No receipt was uploaded for this order.');
+  return signedLink(p.proofPublicId, p.proofFormat);
+}
 
 // The ONE function that changes an order's status. Atomic: it only saves if the status is still what we read.
 async function transition(orderId, action, actor, payload) {
   const order = await Order.findById(orderId).lean();
   if (!order) throw new OrderError(404, 'NOT_FOUND', 'Order not found.');
-  const t = buildTransition(order, action, actor, payload, new Date());
+  const ctx = {};
+  if (NEEDS_BANK.includes(action)) {
+    const shop = await Seller.findById(order.seller).select('+bankDetails').lean();
+    ctx.bank = shop && shop.bankDetails;
+  }
+  const t = buildTransition(order, action, actor, payload, new Date(), ctx);
 
   const update = { $set: t.set, $push: { statusHistory: t.history } };
   if (t.inc) update.$inc = t.inc;
@@ -39,6 +78,7 @@ async function applySellerCounters(shopId, counters) {
 
 async function createOrder(buyer, body) {
   const { shopId, items } = body || {};
+  const how = cleanFulfilment(body); // pickup or delivery (with the delivery details), validated before anything is saved
   if (!mongoose.isValidObjectId(shopId)) throw new OrderError(400, 'VALIDATION', 'A valid shop is required.');
   if (!Array.isArray(items) || !items.length || items.length > 50) throw new OrderError(400, 'VALIDATION', 'Add 1 to 50 items.');
 
@@ -67,8 +107,9 @@ async function createOrder(buyer, body) {
   const doc = await Order.create({
     orderId: await nextOrderNumber(now),
     buyer: buyer.id, seller: shopId, items: lines, total,
-    status: 'PENDING', statusChangedAt: now, deadlineAt: deadlineFor('PENDING', now),
-    statusHistory: [{ from: null, to: 'PENDING', by: buyer.id, byRole: 'BUYER', reason: 'Order placed', at: now }]
+    fulfilment: how.fulfilment, delivery: how.delivery, productTotal: total, deliveryFee: 0,
+    status: 'PENDING', statusChangedAt: now, deadlineAt: deadlineFor('PENDING', now, how.fulfilment),
+    statusHistory: [{ from: null, to: 'PENDING', by: buyer.id, byRole: 'BUYER', reason: how.fulfilment === 'DELIVERY' ? 'Order placed (delivery)' : 'Order placed (pickup)', at: now }]
   });
 
   // Safety net for double clicks: if two requests slipped past the check together, undo the extra one
@@ -78,12 +119,12 @@ async function createOrder(buyer, body) {
     await Order.deleteOne({ _id: doc._id, status: 'PENDING' });
     throw new OrderError(409, 'ORDER_LIMIT', 'Your order limit was reached. Please try again.');
   }
-  return doc.toObject();
+  return publicOrder(doc.toObject());
 }
 
-const listForBuyer = (buyerId) => Order.find({ buyer: buyerId }).sort({ createdAt: -1 }).limit(200)
-  .populate('seller', 'businessName shopNumber whatsappNumber').lean();
-const listForShop = (shopId, status) => Order.find(Object.assign({ seller: shopId }, status ? { status } : {})).sort({ createdAt: -1 }).limit(200)
-  .populate('buyer', 'fullName phone').lean();
+const listForBuyer = async (buyerId) => (await Order.find({ buyer: buyerId }).sort({ createdAt: -1 }).limit(200)
+  .populate('seller', 'businessName shopNumber whatsappNumber').lean()).map(publicOrder);
+const listForShop = async (shopId, status) => (await Order.find(Object.assign({ seller: shopId }, status ? { status } : {})).sort({ createdAt: -1 }).limit(200)
+  .populate('buyer', 'fullName phone').lean()).map(publicOrder);
 
-module.exports = { transition, createOrder, listForBuyer, listForShop };
+module.exports = { transition, createOrder, listForBuyer, listForShop, publicOrder, signedLink, receiptLink };

@@ -1,5 +1,17 @@
 const mongoose = require('mongoose');
 
+// Where buyers send their money. Never part of any public shop data: the field is excluded from every
+// query unless asked for with .select('+bankDetails'), and a buyer only ever sees a copy that was saved on
+// their own order at the moment the seller accepted it (see services/orderService.js).
+const bankDetailsSchema = new mongoose.Schema(
+  {
+    bankName: { type: String, trim: true },
+    accountName: { type: String, trim: true },
+    accountNumber: { type: String, trim: true },
+  },
+  { _id: false }
+);
+
 const sellerSchema = new mongoose.Schema(
   {
     user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
@@ -21,6 +33,7 @@ const sellerSchema = new mongoose.Schema(
 
     shopPhotoUrl: { type: String, default: null },
     govIdUrl: { type: String, default: null, select: false }, // sensitive — admin-only, excluded by default
+    bankDetails: { type: bankDetailsSchema, default: undefined, select: false }, // sensitive — see note above
 
     status: {
       type: String,

@@ -2,15 +2,22 @@
 // Run with:  node --test
 const test = require('node:test');
 const assert = require('node:assert');
-const { buildTransition, checkBuyerLimit, ACTIONS, TERMINAL, TIMER_RULES, ADMIN_DECISIONS } = require('../services/workflow');
+const { buildTransition, checkBuyerLimit, cleanFulfilment, ACTIONS, TERMINAL, TIMER_RULES, ADMIN_DECISIONS } = require('../services/workflow');
 const { computeStats } = require('../services/shopStats');
+const { cleanBankDetails, isBankComplete } = require('../utils/bankDetails');
+const cfg = require('../config/orders');
 
 const BUYER = { id: 'b1', role: 'BUYER' };
 const SELLER = { id: 's1', role: 'SELLER', shopId: 'shop1' };
 const ADMIN = { id: 'a1', role: 'ADMIN' };
 const SYSTEM = { id: null, role: 'SYSTEM' };
 const mk = (status, extra) => Object.assign({ _id: 'o1', buyer: 'b1', seller: 'shop1', total: 5000, status, replacementCount: 0 }, extra || {});
-const go = (order, action, actor, payload) => buildTransition(order, action, actor, payload || {}, new Date('2026-10-04T10:00:00Z'));
+const NOW = new Date('2026-10-04T10:00:00Z');
+const BANK = { bankName: 'GTBank', accountName: 'Aisha Small Chops', accountNumber: '0123456789' };
+// By default the seller has saved valid bank details (ctx.bank); tests of the bank rules pass their own ctx
+const go = (order, action, actor, payload, ctx) => buildTransition(order, action, actor, payload || {}, NOW, ctx === undefined ? { bank: BANK } : ctx);
+const apply = (order, t) => Object.assign({}, order, t.set);
+const delivery = (status, extra) => mk(status, Object.assign({ fulfilment: 'DELIVERY', productTotal: 2000, total: 2000 }, extra || {}));
 const fails = (fn, code) => assert.throws(fn, (e) => e.code === code, 'expected ' + code);
 
 test('happy path from PENDING to COMPLETED', () => {
@@ -189,4 +196,185 @@ test('buyer limit: up to 3 open orders, one per shop', () => {
   checkBuyerLimit(open('shopA', 'shopB'), 'shopC');       // 2 open, third shop: fine
   fails(() => checkBuyerLimit(open('shopA'), 'shopA'), 'OPEN_ORDER_IN_SHOP');          // same shop again
   fails(() => checkBuyerLimit(open('shopA', 'shopB', 'shopC'), 'shopD'), 'ORDER_LIMIT'); // already 3
+});
+
+// ═══════════ Version 1: pickup / delivery flow ═══════════
+
+test('pickup happy path: no total step, bank details copied onto the order when the seller accepts', () => {
+  let o = mk('PENDING', { fulfilment: 'PICKUP' });
+  const accept = go(o, 'SELLER_ACCEPT', SELLER);
+  assert.strictEqual(accept.to, 'ACCEPTED');
+  assert.strictEqual(accept.set.paymentDetails.accountNumber, '0123456789');
+  assert.deepStrictEqual(Object.keys(accept.set.paymentDetails).sort(), ['accountName', 'accountNumber', 'bankName', 'sharedAt']);
+  o = apply(o, accept);
+  fails(() => go(o, 'SELLER_SEND_TOTAL', SELLER, { deliveryFee: 100 }), 'BAD_STATE');   // pickup has no fee to send
+  assert.strictEqual(go(o, 'BUYER_PAID', BUYER, { method: 'Bank transfer' }).to, 'PAYMENT_SUBMITTED');
+});
+
+test('delivery happy path: total is sent, accepted, then bank details are revealed and the order completes', () => {
+  let o = delivery('PENDING');
+  const steps = [
+    ['SELLER_ACCEPT', SELLER, {}, 'ACCEPTED'],
+    ['SELLER_SEND_TOTAL', SELLER, { deliveryFee: 100 }, 'TOTAL_SENT'],
+    ['BUYER_ACCEPT_TOTAL', BUYER, {}, 'TOTAL_ACCEPTED'],
+    ['BUYER_PAID', BUYER, { method: 'Bank transfer', reference: ' TRX-77 ' }, 'PAYMENT_SUBMITTED'],
+    ['SELLER_CONFIRM_PAYMENT', SELLER, {}, 'PAYMENT_CONFIRMED'],
+    ['SELLER_DELIVER', SELLER, {}, 'DELIVERED'],
+    ['BUYER_CONFIRM_RECEIPT', BUYER, {}, 'COMPLETED']
+  ];
+  for (const [action, actor, payload, expected] of steps) {
+    const t = go(o, action, actor, payload);
+    assert.strictEqual(t.to, expected, action);
+    if (action === 'SELLER_ACCEPT') assert.strictEqual(t.set.paymentDetails, undefined, 'bank details stay hidden until the buyer accepts the total');
+    if (action === 'BUYER_ACCEPT_TOTAL') assert.strictEqual(t.set.paymentDetails.accountNumber, '0123456789');
+    if (action === 'BUYER_PAID') { assert.strictEqual(t.set['payment.amount'], 2100); assert.strictEqual(t.set['payment.reference'], 'TRX-77'); }
+    o = apply(o, t);
+  }
+  assert.strictEqual(o.total, 2100);
+  assert.strictEqual(o.productTotal, 2000);
+  assert.strictEqual(o.deliveryFee, 100);
+  assert.strictEqual(o.deadlineAt, null);
+});
+
+test('a seller without complete bank details cannot accept an order', () => {
+  for (const bank of [undefined, null, {}, { bankName: 'GTBank', accountName: 'Aisha', accountNumber: '12345' }, { bankName: 'GTBank', accountNumber: '0123456789' }]) {
+    assert.throws(() => go(mk('PENDING'), 'SELLER_ACCEPT', SELLER, {}, { bank }),
+      (e) => e.code === 'BANK_DETAILS_REQUIRED' && e.status === 409 && e.message === 'Complete your payment details before accepting customer orders.');
+  }
+  fails(() => go(mk('PENDING'), 'SELLER_ACCEPT', SELLER, {}, {}), 'BANK_DETAILS_REQUIRED');
+  // declining never needs bank details
+  assert.strictEqual(go(mk('PENDING'), 'SELLER_DECLINE', SELLER, {}, {}).to, 'CANCELLED');
+});
+
+test('delivery fee: whole naira, 0 allowed, limited, seller only, only while ACCEPTED', () => {
+  const o = delivery('ACCEPTED');
+  assert.strictEqual(go(o, 'SELLER_SEND_TOTAL', SELLER, { deliveryFee: 0 }).set.total, 2000);            // free delivery
+  assert.strictEqual(go(o, 'SELLER_SEND_TOTAL', SELLER, { deliveryFee: '1,500' }).set.total, 3500);       // typed with a comma
+  assert.strictEqual(go(o, 'SELLER_SEND_TOTAL', SELLER, { deliveryFee: cfg.MAX_DELIVERY_FEE }).set.deliveryFee, cfg.MAX_DELIVERY_FEE);
+  for (const bad of [undefined, '', 'abc', -1, 10.5, cfg.MAX_DELIVERY_FEE + 1, NaN, null]) fails(() => go(o, 'SELLER_SEND_TOTAL', SELLER, { deliveryFee: bad }), 'VALIDATION');
+  fails(() => go(o, 'SELLER_SEND_TOTAL', BUYER, { deliveryFee: 100 }), 'FORBIDDEN');
+  fails(() => go(delivery('PENDING'), 'SELLER_SEND_TOTAL', SELLER, { deliveryFee: 100 }), 'BAD_STATE');
+  fails(() => go(delivery('TOTAL_SENT'), 'SELLER_SEND_TOTAL', SELLER, { deliveryFee: 100 }), 'BAD_STATE');  // the fee cannot be changed after it was sent
+});
+
+test('the total is fixed once sent: price comes from productTotal, never from the old total plus a new fee', () => {
+  const t = go(delivery('ACCEPTED'), 'SELLER_SEND_TOTAL', SELLER, { deliveryFee: 300 });
+  assert.deepStrictEqual([t.set.productTotal, t.set.deliveryFee, t.set.total], [2000, 300, 2300]);
+  // an order that was created before productTotal existed falls back to its total
+  const legacy = mk('ACCEPTED', { fulfilment: 'DELIVERY', total: 1800 });
+  assert.strictEqual(go(legacy, 'SELLER_SEND_TOTAL', SELLER, { deliveryFee: 200 }).set.total, 2000);
+});
+
+test('payment: delivery orders cannot be paid before the total is accepted; receipt is optional and safe', () => {
+  fails(() => go(delivery('ACCEPTED'), 'BUYER_PAID', BUYER, { method: 'Transfer' }), 'BAD_STATE');
+  fails(() => go(delivery('TOTAL_SENT'), 'BUYER_PAID', BUYER, { method: 'Transfer' }), 'BAD_STATE');
+  const paid = go(delivery('TOTAL_ACCEPTED', { total: 2100 }), 'BUYER_PAID', BUYER, { method: 'POS' });
+  assert.strictEqual(paid.set['payment.amount'], 2100);
+  assert.strictEqual(paid.set['payment.proofImageUrl'], undefined);                         // no receipt: fine
+  const withReceipt = go(mk('ACCEPTED'), 'BUYER_PAID', BUYER, { method: 'POS', proofImageUrl: 'https://img.example/r.jpg', proofPublicId: 'alfijeer/payment-proofs/r1', proofFormat: 'png' });
+  assert.strictEqual(withReceipt.set['payment.proofPublicId'], 'alfijeer/payment-proofs/r1');
+  assert.strictEqual(withReceipt.set['payment.proofFormat'], 'png');
+  fails(() => go(mk('ACCEPTED'), 'BUYER_PAID', BUYER, { method: 'POS', proofImageUrl: 'http://insecure.example/r.jpg', proofPublicId: 'x' }), 'VALIDATION');
+  fails(() => go(mk('ACCEPTED'), 'BUYER_PAID', BUYER, { method: 'POS', proofImageUrl: 'https://img.example/r.jpg' }), 'VALIDATION');   // must come from our own upload
+  fails(() => go(mk('ACCEPTED'), 'BUYER_PAID', BUYER, {}), 'VALIDATION');                    // payment method still required
+});
+
+test('cancel rules: before payment only; refusing a total has its own reason; admin can cancel in the new statuses', () => {
+  for (const s of ['PENDING', 'ACCEPTED', 'TOTAL_ACCEPTED']) assert.strictEqual(go(delivery(s), 'BUYER_CANCEL', BUYER).set.cancelReason, 'BUYER_CANCELLED', s);
+  fails(() => go(delivery('PAYMENT_SUBMITTED'), 'BUYER_CANCEL', BUYER), 'BAD_STATE');
+  fails(() => go(delivery('TOTAL_SENT'), 'BUYER_CANCEL', BUYER), 'BAD_STATE');
+  const declined = go(delivery('TOTAL_SENT'), 'BUYER_DECLINE_TOTAL', BUYER);
+  assert.strictEqual(declined.to, 'CANCELLED');
+  assert.strictEqual(declined.set.cancelReason, 'TOTAL_DECLINED');
+  assert.strictEqual(declined.set.cancelledBy, 'BUYER');
+  fails(() => go(delivery('ACCEPTED'), 'BUYER_DECLINE_TOTAL', BUYER), 'BAD_STATE');
+  for (const s of ['TOTAL_SENT', 'TOTAL_ACCEPTED']) assert.strictEqual(go(delivery(s), 'ADMIN_CANCEL', ADMIN, { reason: 'fraud found' }).to, 'CANCELLED', s);
+});
+
+test('buyer cannot accept a total when the seller has no payment details to show', () => {
+  fails(() => go(delivery('TOTAL_SENT'), 'BUYER_ACCEPT_TOTAL', BUYER, {}, { bank: null }), 'BANK_DETAILS_REQUIRED');
+});
+
+// ═══════════ Fair timers: each one acts on whoever was expected to act next ═══════════
+
+test('timers: a delivery order waiting in ACCEPTED is the seller\'s fault; a pickup order waiting in ACCEPTED is the buyer\'s', () => {
+  const d = go(delivery('ACCEPTED'), 'TIMER_TOTAL_NOT_SENT', SYSTEM);
+  assert.strictEqual(d.set.cancelReason, 'SELLER_NO_TOTAL');
+  fails(() => go(delivery('ACCEPTED'), 'TIMER_PAYMENT_EXPIRE', SYSTEM), 'BAD_STATE');   // never blame the buyer for the seller's silence
+  const p = go(mk('ACCEPTED'), 'TIMER_PAYMENT_EXPIRE', SYSTEM);
+  assert.strictEqual(p.set.cancelReason, 'PAYMENT_DEADLINE_EXPIRED');
+  fails(() => go(mk('ACCEPTED'), 'TIMER_TOTAL_NOT_SENT', SYSTEM), 'BAD_STATE');         // pickup has no total to wait for
+  fails(() => go(mk('ACCEPTED', { fulfilment: 'PICKUP' }), 'TIMER_TOTAL_NOT_SENT', SYSTEM), 'BAD_STATE');
+});
+
+test('timers: buyer silence on a total, and buyer not paying after accepting it, are the buyer\'s', () => {
+  assert.strictEqual(go(delivery('TOTAL_SENT'), 'TIMER_TOTAL_EXPIRE', SYSTEM).set.cancelReason, 'TOTAL_EXPIRED');
+  assert.strictEqual(go(delivery('TOTAL_ACCEPTED'), 'TIMER_PAYMENT_EXPIRE', SYSTEM).set.cancelReason, 'PAYMENT_DEADLINE_EXPIRED');
+  for (const s of ['PENDING', 'TOTAL_SENT']) fails(() => go(mk(s), 'TIMER_PAYMENT_EXPIRE', SYSTEM), 'BAD_STATE');
+});
+
+test('timer rules cover every waiting status and pick the right action by order type', () => {
+  const rule = (status, fulfilment) => TIMER_RULES.filter(([s, , f]) => {
+    if (s !== status) return false;
+    if (!f) return true;
+    return fulfilment === 'DELIVERY' ? f.fulfilment === 'DELIVERY' : (f.fulfilment && f.fulfilment.$ne === 'DELIVERY');
+  }).map(([, a]) => a);
+  assert.deepStrictEqual(rule('ACCEPTED', 'PICKUP'), ['TIMER_PAYMENT_EXPIRE']);
+  assert.deepStrictEqual(rule('ACCEPTED', 'DELIVERY'), ['TIMER_TOTAL_NOT_SENT']);
+  assert.deepStrictEqual(rule('TOTAL_SENT'), ['TIMER_TOTAL_EXPIRE']);
+  assert.deepStrictEqual(rule('TOTAL_ACCEPTED'), ['TIMER_PAYMENT_EXPIRE']);
+  // every status a timer watches has a deadline, so no order can wait forever
+  for (const [status] of TIMER_RULES) assert.ok(cfg.DEADLINE_HOURS[status] > 0, status + ' needs a deadline');
+});
+
+test('deadlines follow who must act: delivery ACCEPTED is the seller\'s shorter clock', () => {
+  const H = 3600000;
+  const hoursOf = (t) => (t.set.deadlineAt - NOW) / H;
+  assert.strictEqual(hoursOf(go(delivery('PENDING'), 'SELLER_ACCEPT', SELLER)), cfg.DEADLINE_HOURS_DELIVERY.ACCEPTED);   // seller owes the total
+  assert.strictEqual(hoursOf(go(mk('PENDING'), 'SELLER_ACCEPT', SELLER)), cfg.DEADLINE_HOURS.ACCEPTED);                 // buyer owes the payment
+  assert.strictEqual(hoursOf(go(delivery('ACCEPTED'), 'SELLER_SEND_TOTAL', SELLER, { deliveryFee: 100 })), cfg.DEADLINE_HOURS.TOTAL_SENT);
+  assert.strictEqual(hoursOf(go(delivery('TOTAL_SENT'), 'BUYER_ACCEPT_TOTAL', BUYER)), cfg.DEADLINE_HOURS.TOTAL_ACCEPTED);
+});
+
+test('terminal statuses still allow nothing, including the new actions', () => {
+  const actors = { BUYER, SELLER, ADMIN, SYSTEM };
+  for (const status of TERMINAL) {
+    for (const name of ['SELLER_SEND_TOTAL', 'BUYER_ACCEPT_TOTAL', 'BUYER_DECLINE_TOTAL', 'TIMER_TOTAL_NOT_SENT', 'TIMER_TOTAL_EXPIRE']) {
+      assert.throws(() => go(delivery(status), name, actors[ACTIONS[name].roles[0]], { deliveryFee: 100 }), undefined, `${name} must fail from ${status}`);
+    }
+  }
+});
+
+// ═══════════ Order input and bank details ═══════════
+
+test('new orders: pickup needs nothing more, delivery needs name, phone and address', () => {
+  assert.deepStrictEqual(cleanFulfilment({}), { fulfilment: 'PICKUP' });
+  assert.deepStrictEqual(cleanFulfilment({ fulfilment: 'pickup', delivery: { name: 'ignored' } }), { fulfilment: 'PICKUP' });
+  const ok = cleanFulfilment({ fulfilment: 'DELIVERY', delivery: { name: '  Musa   Bello ', phone: '0803 123-4567', address: '12 Zoo Road, Kano', landmark: ' Near the mosque ', note: '' } });
+  assert.strictEqual(ok.fulfilment, 'DELIVERY');
+  assert.deepStrictEqual(ok.delivery, { name: 'Musa Bello', phone: '08031234567', address: '12 Zoo Road, Kano', landmark: 'Near the mosque', note: undefined });
+  const base = { name: 'Musa', phone: '08031234567', address: '12 Zoo Road, Kano' };
+  for (const [field, value] of [['name', ''], ['phone', '123'], ['phone', 'call me'], ['address', 'Kano'], ['landmark', 'x'.repeat(121)], ['note', 'x'.repeat(301)]]) {
+    fails(() => cleanFulfilment({ fulfilment: 'DELIVERY', delivery: Object.assign({}, base, { [field]: value }) }), 'VALIDATION');
+  }
+  fails(() => cleanFulfilment({ fulfilment: 'DELIVERY' }), 'VALIDATION');
+  fails(() => cleanFulfilment({ fulfilment: 'COURIER' }), 'VALIDATION');
+});
+
+test('bank details: bank name, account name and a 10 digit account number are all required', () => {
+  const ok = cleanBankDetails({ bankName: ' GTBank ', accountName: 'Aisha   Small Chops', accountNumber: '0123 456 789' });
+  assert.deepStrictEqual(ok, { ok: true, value: { bankName: 'GTBank', accountName: 'Aisha Small Chops', accountNumber: '0123456789' } });
+  for (const bad of [{}, { bankName: 'GTBank', accountName: 'Aisha' }, { bankName: 'GTBank', accountName: 'Aisha', accountNumber: '123456789' },
+    { bankName: 'GTBank', accountName: 'Aisha', accountNumber: '01234567890' }, { bankName: 'GTBank', accountName: 'Aisha', accountNumber: '01234abc89' },
+    { bankName: '', accountName: 'Aisha', accountNumber: '0123456789' }, { bankName: 'GTBank', accountName: ' ', accountNumber: '0123456789' }]) {
+    assert.strictEqual(cleanBankDetails(bad).ok, false);
+  }
+  assert.strictEqual(isBankComplete(BANK), true);
+  assert.strictEqual(isBankComplete(null), false);
+  assert.strictEqual(isBankComplete({ bankName: 'GTBank' }), false);
+});
+
+test('shop stats: a seller who never sent the delivery total counts like a seller who never accepted', () => {
+  const orders = [{ status: 'CANCELLED', createdAt: NOW, cancelReason: 'SELLER_NO_TOTAL', statusHistory: [] }, { status: 'CANCELLED', createdAt: NOW, cancelReason: 'TOTAL_EXPIRED', statusHistory: [] }];
+  assert.strictEqual(computeStats(orders, { status: 'approved' }, 'all').trust.sellerTimeoutCount, 1); // the buyer's own silence is not held against the shop
 });

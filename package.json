@@ -8,6 +8,7 @@
     "dev": "nodemon server.js",
     "test": "node --test",
     "migrate:orders": "node scripts/migrateOrders.js",
+    "migrate:orders-v1": "node scripts/migrateOrdersV1.js",
     "create-admin": "node scripts/createAdmin.js"
   },
   "author": "KAUSANITECH",

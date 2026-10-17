@@ -3,6 +3,7 @@ const Product = require('../models/Product');
 const User = require('../models/User');
 const Order = require('../models/Order');
 const { getNextSequence } = require('../models/Counter');
+const { cleanBankDetails, hasBankFields, isBankComplete } = require('../utils/bankDetails');
 
 // Shapes a Seller doc (with populated `user`) into what the frontend expects:
 // phone comes from the linked User, whatsappNumber/latitude/longitude/etc.
@@ -56,7 +57,8 @@ async function listSellers(req, res) {
 
 // GET /api/sellers/me — the logged-in seller's own profile + products
 async function getMyShop(req, res) {
-  const seller = await Seller.findOne({ user: req.user._id }).populate('user', 'fullName phone email');
+  // bankDetails is hidden by default; the seller may read their own
+  const seller = await Seller.findOne({ user: req.user._id }).select('+bankDetails').populate('user', 'fullName phone email');
   if (!seller) return res.status(404).json({ message: 'No shop found for this account.' });
 
   const products = await Product.find({ seller: seller._id }).sort({ createdAt: -1 });
@@ -65,6 +67,7 @@ async function getMyShop(req, res) {
   res.json({
     seller: {
       ...s,
+      paymentDetailsComplete: isBankComplete(s.bankDetails), // the dashboard uses this to remind the seller before an order arrives
       whatsappNumber: s.whatsappNumber,
       user: { fullName: s.user?.fullName, phone: s.user?.phone, email: s.user?.email },
     },
@@ -85,8 +88,22 @@ async function updateMyShop(req, res) {
   if (req.body.longitude !== undefined) seller.longitude = Number(req.body.longitude);
   if (req.file) seller.shopPhotoUrl = req.file.path; // new banner/shop photo, uploaded straight to Cloudinary
 
+  // Settings → Payment Details. All three fields travel together and must be valid, so a seller can edit
+  // them but can never blank them out. Validated before anything else is saved.
+  let bank = null;
+  if (hasBankFields(req.body)) {
+    bank = cleanBankDetails(req.body);
+    if (!bank.ok) return res.status(400).json({ message: bank.message });
+  }
+
   await seller.save();
-  res.json({ seller });
+  if (bank) await Seller.updateOne({ _id: seller._id }, { $set: { bankDetails: bank.value } }); // hidden field: written directly
+
+  // Never echo the bank details back from here: GET /sellers/me is the one place the owner reads them.
+  const fresh = await Seller.findById(seller._id).select('+bankDetails').lean();
+  const out = seller.toObject();
+  delete out.bankDetails;
+  res.json({ seller: out, paymentDetailsComplete: isBankComplete(fresh && fresh.bankDetails) });
 }
 
 // PUT /api/sellers/:id/approve — admin only

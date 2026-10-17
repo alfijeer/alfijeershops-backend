@@ -44,7 +44,7 @@ function computeStats(orders, shop, range) {
     verificationStatus: shop ? shop.status : null,
     memberSince: shop ? shop.createdAt : null,
     strikes,
-    sellerTimeoutCount: orders.filter((o) => o.cancelReason === 'SELLER_TIMEOUT').length,
+    sellerTimeoutCount: orders.filter((o) => o.cancelReason === 'SELLER_TIMEOUT' || o.cancelReason === 'SELLER_NO_TOTAL').length,
     sellerFaultRefunds: orders.filter((o) => o.refund && o.refund.faultParty === 'SELLER' && ['REFUND_PENDING', 'REFUNDED'].includes(o.status)).length
   };
 
