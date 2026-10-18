@@ -25,10 +25,19 @@ async function search(req, res, next) {
     const q = String(req.query.q || '').slice(0, 80);
     const category = String(req.query.category || '').slice(0, 60);
     const inCat = !!category && category !== 'all';
-    const tokens = core.tokenize(q);
-    const phrase = tokens.join(' ');
-
     const shops = await approvedShops();
+
+    // A shop number ("12", "#12", "shop 12") finds that shop; "shop 12 samsung" searches inside it.
+    const sn = core.extractShopNumber(q);
+    const numberShops = sn.number === null ? [] : shops.filter((s) => Number(s.shopNumber) === sn.number);
+    const tokens = core.tokenize(numberShops.length ? sn.rest : q);
+    const phrase = tokens.join(' ');
+    const pool = numberShops.length ? numberShops : shops;      // where products and shops are looked for
+
+    if (numberShops.length && !tokens.length) {
+      return res.json({ query: q, mode: 'exact', inferredCategories: [], products: [], similarProducts: [], categoryShops: [],
+        shops: numberShops.map((s) => ({ _id: s._id, reason: 'number', productCount: 0 })) });
+    }
     if (!tokens.length && !inCat) {
       const counts0 = {};
       shops.forEach((s) => { counts0[s.category] = (counts0[s.category] || 0) + 1; });
@@ -36,7 +45,7 @@ async function search(req, res, next) {
         categories: Object.entries(counts0).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count) });
     }
     const shopById = new Map(shops.map((s) => [String(s._id), s]));
-    const ids = shops.map((s) => s._id);
+    const ids = pool.map((s) => s._id);
 
     // 1) EXACT: every word matches
     const filter = { seller: { $in: ids } };
@@ -50,7 +59,7 @@ async function search(req, res, next) {
     const byProduct = new Map();
     found.forEach((p) => byProduct.set(String(p.seller), (byProduct.get(String(p.seller)) || 0) + 1));
     const exact = new Map();
-    shops.forEach((s) => {
+    pool.forEach((s) => {
       if (inCat && s.category !== category && !byProduct.has(String(s._id))) return;
       if (tokens.length && !core.shopMatches(s, tokens) && !byProduct.has(String(s._id))) return;
       exact.set(String(s._id), { _id: s._id, reason: byProduct.has(String(s._id)) ? 'product' : (tokens.length ? 'name' : 'category'), productCount: byProduct.get(String(s._id)) || 0 });
@@ -58,7 +67,7 @@ async function search(req, res, next) {
     const exactShops = [...exact.values()].sort((a, b) => b.productCount - a.productCount);
 
     // 2) RELATED: shops in the categories the words imply ("samsung" -> phone & electronics shops)
-    const inferred = tokens.length && !inCat ? core.inferCategories(tokens) : [];
+    const inferred = tokens.length && !inCat && !numberShops.length ? core.inferCategories(tokens) : [];
     const categoryShops = inferred.length
       ? shops.filter((s) => inferred.includes(s.category) && !exact.has(String(s._id))).slice(0, 12).map((s) => ({ _id: s._id, category: s.category }))
       : [];

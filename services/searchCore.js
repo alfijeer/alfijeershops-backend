@@ -65,10 +65,21 @@ function scoreProduct(p, tokens, phrase) {
   return s;
 }
 
+// Shop numbers: "shop 12", "Shop #012", "#12", or just "12" (whole query). Returns { number, rest } or { number: null }.
+// "shop 12 samsung" -> number 12, rest "samsung" (so the buyer can look inside one shop).
+function extractShopNumber(q) {
+  const text = String(q || '').trim();
+  let m = text.match(/^(?:shop\s*)?#?\s*0*(\d{1,6})$/i);
+  if (m) return { number: Number(m[1]), rest: '' };
+  m = text.match(/\bshop\s*#?\s*0*(\d{1,6})\b/i);
+  if (m) return { number: Number(m[1]), rest: (text.slice(0, m.index) + ' ' + text.slice(m.index + m[0].length)).trim() };
+  return { number: null, rest: text };
+}
+
 // Shop matches when EVERY word appears in its name, category, city or state.
 function shopMatches(shop, tokens) {
   const text = normalize([shop.businessName, shop.category, shop.city, shop.state].join(' '));
   return tokens.every((t) => variants(t).some((v) => text.includes(v)));
 }
 
-module.exports = { isBrand, normalize, escapeRegex, variants, tokenize, categoriesFor, inferCategories, strictProductFilter, looseProductFilter, scoreProduct, shopMatches, CATEGORIES };
+module.exports = { extractShopNumber, isBrand, normalize, escapeRegex, variants, tokenize, categoriesFor, inferCategories, strictProductFilter, looseProductFilter, scoreProduct, shopMatches, CATEGORIES };

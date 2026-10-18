@@ -15,9 +15,9 @@ const match = (doc, f) => Object.entries(f).every(([k, v]) => {
 const model = (rows) => ({ find: (f) => { let r = rows.filter((d) => match(d, f || {})); const q = { select: () => q, sort: () => q, limit: (n) => { r = r.slice(0, n); return q; }, lean: async () => r }; return q; } });
 
 const shops = [
-  { _id: 'A', businessName: 'Musa Phones', category: 'Phones & Electronics', city: 'Kano', state: 'Kano', status: 'approved' },
-  { _id: 'B', businessName: 'Zainab Gadgets', category: 'Phones & Electronics', city: 'Kaduna', state: 'Kaduna', status: 'approved' },
-  { _id: 'C', businessName: 'Ali Fashion', category: 'Fashion & Clothing', city: 'Kano', state: 'Kano', status: 'approved' }
+  { _id: 'A', shopNumber: 1, businessName: 'Musa Phones', category: 'Phones & Electronics', city: 'Kano', state: 'Kano', status: 'approved' },
+  { _id: 'B', shopNumber: 2, businessName: 'Zainab Gadgets', category: 'Phones & Electronics', city: 'Kaduna', state: 'Kaduna', status: 'approved' },
+  { _id: 'C', shopNumber: 12, businessName: 'Ali Fashion', category: 'Fashion & Clothing', city: 'Kano', state: 'Kano', status: 'approved' }
 ];
 const products = [
   { _id: 'p1', seller: 'A', name: 'Samsung Galaxy A05', price: 80000, category: 'Phones & Electronics', description: '', images: [] },
@@ -83,4 +83,25 @@ test('gibberish and symbol-only searches get category shortcuts, never the whole
     assert.ok(r.categories.length > 0);
     assert.strictEqual(r.products.length + r.shops.length, 0);
   }
+});
+
+test('shop number: "12", "#12", "Shop 012" and "shop 12" all find that shop', async () => {
+  for (const q of ['12', '#12', 'Shop 012', 'shop 12']) {
+    const r = await run(q);
+    assert.strictEqual(r.mode, 'exact', q);
+    assert.deepStrictEqual(r.shops.map((s) => s._id), ['C'], q);
+  }
+});
+
+test('shop number plus a word searches inside that shop only', async () => {
+  const r = await run('shop 1 samsung');
+  assert.deepStrictEqual(r.products.map((p) => p.name), ['Samsung Galaxy A05']);
+  assert.deepStrictEqual(r.shops.map((s) => s._id), ['A']);
+  const none = await run('shop 12 samsung');          // Ali Fashion has no Samsung
+  assert.strictEqual(none.products.length, 0);
+});
+
+test('a number that is not a shop is still searched as a product word', async () => {
+  const r = await run('99');
+  assert.strictEqual(r.shops.length, 0);
 });
