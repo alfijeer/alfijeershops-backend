@@ -5,6 +5,7 @@ const upload = require('../middleware/upload');
 const asyncHandler = require('../utils/asyncHandler');
 const {
   listProductsBySeller,
+  listLatestProducts,
   listMyProducts,
   createProduct,
   updateProduct,
@@ -14,6 +15,7 @@ const {
 // /mine is a distinct literal path (no :id-style route in this router to
 // collide with), but kept above the collection GET for readability.
 router.get('/mine', protect, requireRole('seller'), asyncHandler(listMyProducts));
+router.get('/latest', asyncHandler(listLatestProducts)); // public — newest products, for the homepage
 router.get('/', asyncHandler(listProductsBySeller)); // public — ?sellerId=
 
 router.post('/', protect, requireRole('seller'), upload.array('images', 6), asyncHandler(createProduct));

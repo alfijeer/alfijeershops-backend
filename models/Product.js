@@ -14,4 +14,6 @@ const productSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+productSchema.index({ createdAt: -1 }); // the homepage's "fresh arrivals" reads the newest products first
+
 module.exports = mongoose.model('Product', productSchema);

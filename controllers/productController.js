@@ -11,6 +11,23 @@ async function listProductsBySeller(req, res) {
   res.json({ products });
 }
 
+// GET /api/products/latest?limit=8 — public. The newest products from approved shops, for the homepage.
+// Newest first; as shops add products the oldest simply fall off the end of the list.
+async function listLatestProducts(req, res) {
+  const limit = Math.min(Math.max(Number(req.query.limit) || 8, 1), 24);
+  const shops = await Seller.find({ status: 'approved' }).select('businessName shopNumber city').lean();
+  const byId = new Map(shops.map((s) => [String(s._id), s]));
+  const rows = await Product.find({ seller: { $in: [...byId.keys()] } }).sort({ createdAt: -1 }).limit(limit).lean();
+  res.set('Cache-Control', 'public, max-age=30');
+  res.json({
+    products: rows.map((p) => {
+      const s = byId.get(String(p.seller)) || {};
+      return { _id: p._id, name: p.name, price: p.price, category: p.category, image: (p.images && p.images[0]) || null,
+        createdAt: p.createdAt, shopId: p.seller, shopName: s.businessName || '', shopNumber: s.shopNumber, city: s.city || '' };
+    }),
+  });
+}
+
 // GET /api/products/mine — the logged-in seller's own products
 async function listMyProducts(req, res) {
   const seller = await Seller.findOne({ user: req.user._id });
@@ -90,6 +107,7 @@ async function deleteProduct(req, res) {
 
 module.exports = {
   listProductsBySeller,
+  listLatestProducts,
   listMyProducts,
   createProduct,
   updateProduct,

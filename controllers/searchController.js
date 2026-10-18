@@ -8,10 +8,13 @@ const core = require('../services/searchCore');
 let cache = { at: 0, shops: [] };
 async function approvedShops() {
   if (Date.now() - cache.at < 30000) return cache.shops;
-  const shops = await Seller.find({ status: 'approved' }).select('businessName category city state shopNumber').limit(5000).lean();
+  const shops = await Seller.find({ status: 'approved' }).select('businessName category city state shopNumber shopPhotoUrl').limit(5000).lean();
   cache = { at: Date.now(), shops };
   return shops;
 }
+
+// What a result row needs to draw a shop without a second request
+const shopBrief = (s) => ({ businessName: s.businessName, shopNumber: s.shopNumber, category: s.category, city: s.city || '', shopPhotoUrl: s.shopPhotoUrl || null });
 
 const productView = (p, shopById) => {
   const s = shopById.get(String(p.seller)) || {};
@@ -36,7 +39,7 @@ async function search(req, res, next) {
 
     if (numberShops.length && !tokens.length) {
       return res.json({ query: q, mode: 'exact', inferredCategories: [], products: [], similarProducts: [], categoryShops: [],
-        shops: numberShops.map((s) => ({ _id: s._id, reason: 'number', productCount: 0 })) });
+        shops: numberShops.map((s) => ({ _id: s._id, reason: 'number', productCount: 0, ...shopBrief(s) })) });
     }
     if (!tokens.length && !inCat) {
       const counts0 = {};
@@ -62,14 +65,14 @@ async function search(req, res, next) {
     pool.forEach((s) => {
       if (inCat && s.category !== category && !byProduct.has(String(s._id))) return;
       if (tokens.length && !core.shopMatches(s, tokens) && !byProduct.has(String(s._id))) return;
-      exact.set(String(s._id), { _id: s._id, reason: byProduct.has(String(s._id)) ? 'product' : (tokens.length ? 'name' : 'category'), productCount: byProduct.get(String(s._id)) || 0 });
+      exact.set(String(s._id), { _id: s._id, ...shopBrief(s), reason: byProduct.has(String(s._id)) ? 'product' : (tokens.length ? 'name' : 'category'), productCount: byProduct.get(String(s._id)) || 0 });
     });
     const exactShops = [...exact.values()].sort((a, b) => b.productCount - a.productCount);
 
     // 2) RELATED: shops in the categories the words imply ("samsung" -> phone & electronics shops)
     const inferred = tokens.length && !inCat && !numberShops.length ? core.inferCategories(tokens) : [];
     const categoryShops = inferred.length
-      ? shops.filter((s) => inferred.includes(s.category) && !exact.has(String(s._id))).slice(0, 12).map((s) => ({ _id: s._id, category: s.category }))
+      ? shops.filter((s) => inferred.includes(s.category) && !exact.has(String(s._id))).slice(0, 12).map((s) => ({ _id: s._id, ...shopBrief(s) }))
       : [];
 
     // 3) SIMILAR products when nothing matched every word (Samsung Galaxy A07 missing -> other Samsung / Galaxy items)
