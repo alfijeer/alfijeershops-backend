@@ -5,6 +5,7 @@ const upload = require('../middleware/upload');
 const asyncHandler = require('../utils/asyncHandler');
 const {
   listSellers,
+  getPublicShop,
   getMyShop,
   updateMyShop,
   adminUpdateSeller,
@@ -19,6 +20,8 @@ const {
 // to a logged-in admin (admin.html's Pending/All Sellers tabs read this
 // same endpoint with a higher limit).
 router.get('/', optionalAuth, asyncHandler(listSellers));
+
+router.get('/public/:id', asyncHandler(getPublicShop)); // one approved shop (shared shop links)
 
 // Seller's own shop
 router.get('/me', protect, requireRole('seller'), asyncHandler(getMyShop));

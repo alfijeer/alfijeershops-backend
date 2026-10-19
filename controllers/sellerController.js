@@ -55,6 +55,16 @@ async function listSellers(req, res) {
   res.json({ sellers: sellers.map((x) => shapeSeller(x, isAdmin)) }); // explicit arrow: map() must not pass its index as includeTrust
 }
 
+// GET /api/sellers/public/:id — one approved shop, for shop links a seller shares (shop-detail.html?id=...).
+// Works for any shop however old; the list endpoint only returns the newest ones.
+async function getPublicShop(req, res) {
+  const id = String(req.params.id || '');
+  if (!/^[a-f0-9]{24}$/i.test(id)) return res.status(404).json({ message: 'Shop not found.' });
+  const seller = await Seller.findById(id).populate('user', 'phone');
+  if (!seller || seller.status !== 'approved') return res.status(404).json({ message: 'Shop not found.' });
+  res.json({ seller: shapeSeller(seller) });
+}
+
 // GET /api/sellers/me — the logged-in seller's own profile + products
 async function getMyShop(req, res) {
   // bankDetails is hidden by default; the seller may read their own
@@ -212,6 +222,7 @@ async function deleteSeller(req, res) {
 
 module.exports = {
   listSellers,
+  getPublicShop,
   getMyShop,
   updateMyShop,
   adminUpdateSeller,

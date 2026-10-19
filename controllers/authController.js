@@ -5,6 +5,7 @@ const Seller = require('../models/Seller');
 const generateToken = require('../utils/generateToken');
 const sendEmail = require('../utils/sendEmail');
 const { cleanBankDetails } = require('../utils/bankDetails');
+const { accessBlock } = require('../middleware/auth');
 
 // POST /api/auth/register
 // Buyers send JSON (see auth.html completeBuyerReg): fullName, email, phone,
@@ -104,12 +105,8 @@ async function login(req, res) {
   if (!user || !(await user.comparePassword(password))) {
     return res.status(401).json({ message: 'Invalid email or password. Please try again.' });
   }
-  if (user.isDeleted) {
-    return res.status(403).json({ message: 'This account no longer exists.' });
-  }
-  if (user.isSuspended) {
-    return res.status(403).json({ message: user.suspendedReason ? `Your account has been suspended: ${user.suspendedReason}` : 'Your account has been suspended. Contact support for help.' });
-  }
+  const blocked = user.role === 'admin' ? null : await accessBlock(user);   // deleted, suspended person, or suspended shop
+  if (blocked) return res.status(blocked.status).json({ message: blocked.message, code: blocked.code });
 
   const token = generateToken(user._id, user.role);
   const payload = { token, role: user.role, user: user.toPublicJSON() };

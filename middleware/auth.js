@@ -1,5 +1,25 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const Seller = require('../models/Seller');
+
+// Why an account may not use the app right now, or null if it may. Used on every request AND at login, so a
+// suspension takes effect immediately, even for a token that was issued before the suspension.
+// (Suspending a shop changes the SHOP's status; suspending a person changes the USER's flags. Both are checked.)
+async function accessBlock(user) {
+  if (!user) return { status: 401, code: 'NO_USER', message: 'Not authorized — user no longer exists.' };
+  if (user.isDeleted) return { status: 403, code: 'ACCOUNT_DELETED', message: 'This account no longer exists.' };
+  if (user.isSuspended) {
+    return { status: 403, code: 'ACCOUNT_SUSPENDED',
+      message: user.suspendedReason ? `Your account has been suspended: ${user.suspendedReason}` : 'Your account has been suspended. Contact support for help.' };
+  }
+  if (user.role === 'seller') {
+    const shop = await Seller.findOne({ user: user._id }).select('status').lean();
+    if (shop && shop.status === 'suspended') {
+      return { status: 403, code: 'ACCOUNT_SUSPENDED', message: 'Your shop has been suspended. Contact support for help.' };
+    }
+  }
+  return null;
+}
 
 // Verifies the Bearer token from api.js's _headers() and attaches the
 // full user document (minus password) to req.user.
@@ -13,9 +33,8 @@ async function protect(req, res, next) {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
     const user = await User.findById(decoded.id);
-    if (!user) {
-      return res.status(401).json({ message: 'Not authorized — user no longer exists.' });
-    }
+    const blocked = user && user.role === 'admin' ? null : await accessBlock(user);   // an admin can never be locked out of the admin tools by a flag
+    if (blocked) return res.status(blocked.status).json({ message: blocked.message, code: blocked.code });
     req.user = user;
     next();
   } catch (err) {
@@ -44,11 +63,11 @@ async function optionalAuth(req, res, next) {
     const token = authHeader.split(' ')[1];
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const user = await User.findById(decoded.id);
-    if (user) req.user = user;
+    if (user && (user.role === 'admin' || !(await accessBlock(user)))) req.user = user;   // a suspended account is treated as a stranger
     next();
   } catch (err) {
     next(); // invalid/expired token on a public route — just proceed as anonymous
   }
 }
 
-module.exports = { protect, requireRole, optionalAuth };
+module.exports = { protect, requireRole, optionalAuth, accessBlock };

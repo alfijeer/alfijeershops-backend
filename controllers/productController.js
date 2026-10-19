@@ -7,6 +7,10 @@ async function listProductsBySeller(req, res) {
   const { sellerId } = req.query;
   if (!sellerId) return res.status(400).json({ message: 'sellerId query param is required.' });
 
+  // A shop that is not approved (suspended, rejected, pending) has no public listings
+  const shop = await Seller.findById(sellerId).select('status').lean().catch(() => null);
+  if (!shop || shop.status !== 'approved') return res.json({ products: [] });
+
   const products = await Product.find({ seller: sellerId }).sort({ createdAt: -1 });
   res.json({ products });
 }
@@ -46,9 +50,11 @@ async function createProduct(req, res) {
     return res.status(403).json({ message: 'Your shop must be approved before you can list products.' });
   }
 
-  const { name, price, category, description } = req.body;
-  if (!name || !price || !category) {
-    return res.status(400).json({ message: 'Name, price, and category are required.' });
+  const { name, price, description } = req.body;
+  // A product takes its shop's category (the seller no longer picks one per product); an old client may still send one.
+  const category = (req.body.category && String(req.body.category).trim()) || seller.category || 'Other';
+  if (!name || !price) {
+    return res.status(400).json({ message: 'Name and price are required.' });
   }
 
   const images = (req.files || []).map((f) => f.path);
