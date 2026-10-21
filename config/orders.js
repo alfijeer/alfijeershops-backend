@@ -34,6 +34,9 @@ module.exports = {
   MIN_SAMPLE: 10, // below this many orders, rates show as "not enough data"
   FLAGS: { HIGH_DISPUTE_RATE: 0.15, HIGH_CANCEL_RATE: 0.30, MULTIPLE_STRIKES: 2, SLOW_ACCEPT_HOURS: 24, SLOW_DELIVERY_HOURS: 120 },
 
+  // Admin order analysis: how a shop is labelled by its recent activity
+  ACTIVITY: { VERY_ACTIVE_WEEK: 10, QUIET_MONTH_MAX: 2, STOPPED_DAYS: 14 },
+
   // Matches your real models
   ROLE_MAP: { buyer: 'BUYER', seller: 'SELLER', admin: 'ADMIN' },
   SELLER_MODEL: 'Seller',

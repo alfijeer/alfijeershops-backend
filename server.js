@@ -8,6 +8,10 @@ const rateLimit = require('express-rate-limit');
 const connectDB = require('./config/db');
 const { notFound, errorHandler } = require('./middleware/errorHandler');
 
+const pushRoutes = require('./routes/pushRoutes');
+const adminPlatformRoutes = require('./routes/adminPlatformRoutes');
+const publicPlatformRoutes = require('./routes/publicPlatformRoutes');
+const { maintenanceGate } = require('./middleware/maintenance');
 const authRoutes = require('./routes/authRoutes');
 const sellerRoutes = require('./routes/sellerRoutes');
 const buyerRoutes = require('./routes/buyerRoutes');
@@ -77,13 +81,17 @@ app.use(
 // ── Routes ──
 app.get('/api/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
 
+app.use('/api', maintenanceGate);   // admin's "take the platform offline" switch
+app.use('/api', publicPlatformRoutes);
 app.use('/api/auth', authRoutes);
+app.use('/api/push', pushRoutes); // notification sign-up
 app.use('/api/sellers', sellerRoutes);
 app.use('/api/buyers', buyerRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/disputes', disputeRoutes);
 app.use('/api/search', searchRoutes); // product + shop search
+app.use('/api/admin', adminPlatformRoutes); // settings, announcements, order analysis
 app.use('/api/admin', adminOrderRoutes); // admin order queue, payment proof, decisions, shop order stats
 
 app.use(notFound);

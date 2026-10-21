@@ -106,6 +106,10 @@ async function login(req, res) {
     return res.status(401).json({ message: 'Invalid email or password. Please try again.' });
   }
   const blocked = user.role === 'admin' ? null : await accessBlock(user);   // deleted, suspended person, or suspended shop
+  if (user.role !== 'admin') {                                              // platform offline: only admins may sign in
+    const ps = await require('../services/platform').getSettings();
+    if (ps.maintenance.enabled) return res.status(503).json({ code: 'MAINTENANCE', message: ps.maintenance.message, eta: ps.maintenance.eta });
+  }
   if (blocked) return res.status(blocked.status).json({ message: blocked.message, code: blocked.code });
 
   const token = generateToken(user._id, user.role);

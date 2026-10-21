@@ -8,6 +8,7 @@ const Seller = require('../models/Seller');
 const Product = require('../models/Product');
 const AdminLog = require('../models/AdminLog');
 const { nextOrderNumber } = require('../utils/orderNumber');
+const { notifyOrderChange } = require('./push');
 const { buildTransition, deadlineFor, checkBuyerLimit, cleanFulfilment, ownsOrder, TERMINAL, OrderError } = require('./workflow');
 
 // Actions that need the seller's saved bank details (the workflow checks them and, when due, copies them onto the order)
@@ -65,6 +66,7 @@ async function transition(orderId, action, actor, payload) {
     await AdminLog.create({ adminId: actor.id, action, orderId: order._id, shopId: order.seller, note: t.history.reason })
       .catch((e) => console.error('AdminLog failed:', e.message));
   }
+  if (updated.status !== order.status) notifyOrderChange(updated, updated.status, actor.role); // fire and forget
   return updated;
 }
 
@@ -77,6 +79,8 @@ async function applySellerCounters(shopId, counters) {
 }
 
 async function createOrder(buyer, body) {
+  const ps = await require('./platform').getSettings();
+  if (ps.ordersPaused) throw new OrderError(503, 'ORDERS_PAUSED', ps.ordersPausedMessage);
   const { shopId, items } = body || {};
   const how = cleanFulfilment(body); // pickup or delivery (with the delivery details), validated before anything is saved
   if (!mongoose.isValidObjectId(shopId)) throw new OrderError(400, 'VALIDATION', 'A valid shop is required.');
@@ -119,6 +123,7 @@ async function createOrder(buyer, body) {
     await Order.deleteOne({ _id: doc._id, status: 'PENDING' });
     throw new OrderError(409, 'ORDER_LIMIT', 'Your order limit was reached. Please try again.');
   }
+  notifyOrderChange(doc.toObject(), 'PENDING', 'BUYER'); // tell the shop (fire and forget)
   return publicOrder(doc.toObject());
 }
 
