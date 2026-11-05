@@ -8,7 +8,7 @@ const core = require('../services/searchCore');
 let cache = { at: 0, shops: [] };
 async function approvedShops() {
   if (Date.now() - cache.at < 30000) return cache.shops;
-  const shops = await Seller.find({ status: 'approved' }).select('businessName category city state shopNumber shopPhotoUrl').limit(5000).lean();
+  const shops = await Seller.find({ status: 'approved', isDeleted: { $ne: true } }).select('businessName category city state shopNumber shopPhotoUrl').limit(5000).lean();
   cache = { at: Date.now(), shops };
   return shops;
 }

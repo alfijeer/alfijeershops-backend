@@ -133,7 +133,53 @@ async function deleteBuyer(req, res) {
   res.json({ message: 'This buyer has order history, so their account was anonymized and permanently locked instead of removed — their past orders remain intact for your records.' });
 }
 
+// ── Saved shops (the ♥) — now kept on the server so we can alert buyers about them ──
+const mongoose = require('mongoose');
+const Seller = require('../models/Seller');
+
+// GET /api/buyers/saved
+async function getSaved(req, res) {
+  const buyer = await Buyer.findOne({ user: req.user._id }).select('savedShops notifyShopUpdates').lean();
+  res.json({ ids: ((buyer && buyer.savedShops) || []).map(String), notify: buyer ? buyer.notifyShopUpdates !== false : true });
+}
+
+// PUT /api/buyers/saved  body: { ids: [shopId, ...] } — replaces the list. The phone sends the merged list.
+async function setSaved(req, res) {
+  const raw = Array.isArray(req.body && req.body.ids) ? req.body.ids : null;
+  if (!raw) return res.status(400).json({ message: 'ids must be a list.' });
+  const wanted = [...new Set(raw.map(String).filter((id) => mongoose.isValidObjectId(id)))].slice(0, 200);
+
+  // keep only shops that really exist and are not deleted
+  const real = await Seller.find({ _id: { $in: wanted }, isDeleted: { $ne: true } }).select('_id').lean();
+  const ids = wanted.filter((id) => real.some((r) => String(r._id) === id));
+
+  const buyer = await Buyer.findOneAndUpdate({ user: req.user._id }, { $setOnInsert: { user: req.user._id } }, { upsert: true, new: true, setDefaultsOnInsert: true });
+  const before = new Set((buyer.savedShops || []).map(String));
+  const after = new Set(ids);
+  const added = ids.filter((id) => !before.has(id));
+  const removed = [...before].filter((id) => !after.has(id));
+
+  buyer.savedShops = ids;
+  await buyer.save();
+
+  // keep the shop's "saved by N buyers" number honest
+  if (added.length) await Seller.updateMany({ _id: { $in: added } }, { $inc: { savedCount: 1 } });
+  if (removed.length) await Seller.updateMany({ _id: { $in: removed }, savedCount: { $gt: 0 } }, { $inc: { savedCount: -1 } });
+
+  res.json({ ids, notify: buyer.notifyShopUpdates !== false });
+}
+
+// PUT /api/buyers/saved/prefs  body: { notify: true|false } — the on/off switch for alerts
+async function setSavedPrefs(req, res) {
+  const notify = !!(req.body && req.body.notify);
+  await Buyer.findOneAndUpdate({ user: req.user._id }, { $set: { notifyShopUpdates: notify }, $setOnInsert: { user: req.user._id } }, { upsert: true });
+  res.json({ notify });
+}
+
 module.exports = {
+  getSaved,
+  setSaved,
+  setSavedPrefs,
   listBuyers,
   getMyProfile,
   updateMyProfile,
