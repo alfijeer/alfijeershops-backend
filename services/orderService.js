@@ -87,7 +87,7 @@ async function createOrder(buyer, body) {
   if (!Array.isArray(items) || !items.length || items.length > 50) throw new OrderError(400, 'VALIDATION', 'Add 1 to 50 items.');
 
   const shop = await Seller.findById(shopId).lean();
-  if (!shop || shop.status !== cfg.APPROVED_STATUS || shop.isDeleted) throw new OrderError(400, 'SHOP_UNAVAILABLE', 'This shop is not available for orders.');
+  if (!shop || shop.status !== cfg.APPROVED_STATUS) throw new OrderError(400, 'SHOP_UNAVAILABLE', 'This shop is not available for orders.');
 
   // Up to 3 open orders at once, one per shop, until one reaches a final status
   const openOrders = await Order.find({ buyer: buyer.id, status: { $nin: TERMINAL } }).select('seller').lean();

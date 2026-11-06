@@ -90,13 +90,4 @@ async function notifyOrderChange(order, toStatus, actorRole) {
   } catch (e) { console.warn('[push] notify failed:', e.message); }
 }
 
-// Tell every admin something needs them. Fire and forget: it never throws and never blocks the request.
-function notifyAdmins(title, body, url) {
-  if (!isConfigured()) return;
-  (async () => {
-    const admins = await User.find({ role: 'admin' }).select('_id').lean();
-    for (const a of admins) await sendToUser(a._id, { title, body, url: url || '/admin.html', tag: 'admin-alert' });
-  })().catch((e) => console.warn('[push] admin alert failed:', e.message));
-}
-
-module.exports = { messagesFor, notifyOrderChange, notifyAdmins, sendToUser, isConfigured, MESSAGES };
+module.exports = { messagesFor, notifyOrderChange, sendToUser, isConfigured, MESSAGES };

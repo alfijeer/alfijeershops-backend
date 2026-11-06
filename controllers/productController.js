@@ -1,5 +1,4 @@
 const Product = require('../models/Product');
-const shopAlerts = require('../services/shopAlerts');
 const Seller = require('../models/Seller');
 
 // GET /api/products?sellerId=ID — public, used by buyer-dashboard.html's
@@ -9,8 +8,8 @@ async function listProductsBySeller(req, res) {
   if (!sellerId) return res.status(400).json({ message: 'sellerId query param is required.' });
 
   // A shop that is not approved (suspended, rejected, pending) has no public listings
-  const shop = await Seller.findById(sellerId).select('status isDeleted').lean().catch(() => null);
-  if (!shop || shop.status !== 'approved' || shop.isDeleted) return res.json({ products: [] });
+  const shop = await Seller.findById(sellerId).select('status').lean().catch(() => null);
+  if (!shop || shop.status !== 'approved') return res.json({ products: [] });
 
   const products = await Product.find({ seller: sellerId }).sort({ createdAt: -1 });
   res.json({ products });
@@ -20,7 +19,7 @@ async function listProductsBySeller(req, res) {
 // Newest first; as shops add products the oldest simply fall off the end of the list.
 async function listLatestProducts(req, res) {
   const limit = Math.min(Math.max(Number(req.query.limit) || 8, 1), 24);
-  const shops = await Seller.find({ status: 'approved', isDeleted: { $ne: true } }).select('businessName shopNumber city').lean();
+  const shops = await Seller.find({ status: 'approved' }).select('businessName shopNumber city').lean();
   const byId = new Map(shops.map((s) => [String(s._id), s]));
   const rows = await Product.find({ seller: { $in: [...byId.keys()] } }).sort({ createdAt: -1 }).limit(limit).lean();
   res.set('Cache-Control', 'public, max-age=30');
@@ -69,7 +68,6 @@ async function createProduct(req, res) {
     images,
   });
 
-  shopAlerts.onNewProduct(seller, product); // tell buyers who saved this shop (fire and forget)
   res.status(201).json({ product });
 }
 
@@ -84,7 +82,6 @@ async function updateProduct(req, res) {
     return res.status(403).json({ message: 'You can only edit your own products.' });
   }
 
-  const oldPrice = product.price;
   const { name, price, category, description } = req.body;
   if (name !== undefined) product.name = name;
   if (price !== undefined) product.price = Number(price);
@@ -96,7 +93,6 @@ async function updateProduct(req, res) {
   }
 
   await product.save();
-  if (price !== undefined) shopAlerts.onPriceChange(seller, product, oldPrice); // only a real price DROP alerts anyone
   res.json({ product });
 }
 

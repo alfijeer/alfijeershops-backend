@@ -9,11 +9,6 @@ const buyerSchema = new mongoose.Schema(
     user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
     state: { type: String, trim: true },
     city: { type: String, trim: true },
-
-    // Shops this buyer has saved with the heart. Kept on the server (not just in the phone) so we can
-    // send an alert when one of them adds a product or drops a price.
-    savedShops: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Seller' }], default: [], index: true },
-    notifyShopUpdates: { type: Boolean, default: true },
   },
   { timestamps: true }
 );
