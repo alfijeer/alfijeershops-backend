@@ -102,7 +102,7 @@ async function getShopAnalytics(now) {
         lastOrderAt: { $max: '$createdAt' }
     } }
   ]);
-  const shops = await Seller.find({ status: cfg.APPROVED_STATUS }).select('businessName shopNumber city whatsappNumber').lean();
+  const shops = await Seller.find({ status: cfg.APPROVED_STATUS, isDeleted: { $ne: true } }).select('businessName shopNumber city whatsappNumber').lean();
   const rows = buildRows(agg, shops, now);
   return { generatedAt: now, timezone: cfg.TIMEZONE, periodStarts: st, summary: summarize(rows), shops: rows };
 }

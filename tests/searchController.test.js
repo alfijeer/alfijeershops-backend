@@ -10,6 +10,7 @@ const match = (doc, f) => Object.entries(f).every(([k, v]) => {
   const val = doc[k];
   if (v instanceof RegExp) return v.test(val || '');
   if (v && typeof v === 'object' && v.$in) return v.$in.map(String).includes(String(val));
+  if (v && typeof v === 'object' && '$ne' in v) return String(val) !== String(v.$ne);
   return String(val) === String(v);
 });
 const model = (rows) => ({ find: (f) => { let r = rows.filter((d) => match(d, f || {})); const q = { select: () => q, sort: () => q, limit: (n) => { r = r.slice(0, n); return q; }, lean: async () => r }; return q; } });

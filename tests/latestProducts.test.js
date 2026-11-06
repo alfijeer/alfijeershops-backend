@@ -18,6 +18,7 @@ const chain = (rows) => { const q = { select: () => q, lean: async () => rows, s
 const orig = Module._load;
 Module._load = function (r) {
   if (r.endsWith('models/Seller')) return { find: (f) => chain(shops.filter((s) => !f || !f.status || s.status === f.status)) };
+  if (r.endsWith('services/shopAlerts')) return { onNewProduct() {}, onPriceChange() {} };
   if (r.endsWith('models/Product')) return { find: (f) => chain(products.filter((p) => f.seller.$in.includes(String(p.seller)))) };
   return orig.apply(this, arguments);
 };

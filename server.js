@@ -20,8 +20,10 @@ const orderRoutes = require('./routes/orderRoutes');
 const disputeRoutes = require('./routes/disputeRoutes');
 const adminOrderRoutes = require('./routes/adminOrderRoutes');
 const searchRoutes = require('./routes/searchRoutes');
+const reportRoutes = require('./routes/reportRoutes');
 const mongoose = require('mongoose');
 const { startTimers } = require('./services/timers');
+const { startShopPurge } = require('./services/shopPurge');
 
 const app = express();
 
@@ -79,8 +81,7 @@ app.use(
 // serve locally anymore.
 
 // ── Routes ──
-// "build" changes whenever new features ship, so you can open /api/health in a browser and see which version Railway is really running
-app.get('/api/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString(), build: '2026-10-22-admin-v3', features: ['orders', 'push', 'admin-analytics', 'announcements', 'maintenance'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
 
 app.use('/api', maintenanceGate);   // admin's "take the platform offline" switch
 app.use('/api', publicPlatformRoutes);
@@ -92,6 +93,7 @@ app.use('/api/products', productRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/disputes', disputeRoutes);
 app.use('/api/search', searchRoutes); // product + shop search
+app.use('/api/reports', reportRoutes); // buyers report a shop; admins review
 app.use('/api/admin', adminPlatformRoutes); // settings, announcements, order analysis
 app.use('/api/admin', adminOrderRoutes); // admin order queue, payment proof, decisions, shop order stats
 
@@ -104,4 +106,4 @@ app.listen(PORT, () => {
 });
 
 // Order timers: move overdue orders along so nothing stays stuck (every 5 minutes)
-mongoose.connection.once('open', () => startTimers());
+mongoose.connection.once('open', () => { startTimers(); startShopPurge(); }); // startShopPurge: removes shops whose 30-day "undo" window is over

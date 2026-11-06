@@ -43,6 +43,29 @@ const sellerSchema = new mongoose.Schema(
     },
     rejectionReason: { type: String, default: null },
 
+    // Set when an admin deletes a shop that has order history (the record is kept, anonymized, so past orders
+    // stay intact). A deleted shop is NEVER public and can never be approved or reactivated again.
+    isDeleted: { type: Boolean, default: false, index: true },
+    deletedAt: { type: Date, default: null, index: true },   // when it entered the 30-day holding period
+    deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    purgedAt: { type: Date, default: null },                  // set once the holding period is over and the shop was removed for good
+    // How things were just before deletion, so "Restore" can put everything back exactly as it was.
+    preDelete: {
+      type: new mongoose.Schema(
+        { status: String, userSuspended: Boolean, userSuspendedReason: String },
+        { _id: false }
+      ),
+      default: undefined,
+    },
+
+    // Verification badge: an admin has looked at this shop's ID and confirmed the owner is real.
+    isVerified: { type: Boolean, default: false, index: true },
+    verifiedAt: { type: Date, default: null },
+    verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+
+    // The last time buyers who saved this shop were notified (keeps alerts from becoming spam).
+    lastAlertAt: { type: Date, default: null },
+
     // Engagement stats surfaced on the seller dashboard.
     totalViews: { type: Number, default: 0 },
     whatsappClicks: { type: Number, default: 0 },
